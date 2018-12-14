@@ -1,6 +1,6 @@
 # Made by: Graeme Ferguson
-# Golang CRUD Failure-detecting Frontend & Multithreaded Backend
-Third part of semester long project for Parallel and Distributed Systems. The objective of this part was to extend the frontend to detect failure of the backend and report to stdout and to extend the backend to handle requests in a concurrent fashion.
+# Golang CRUD Failure-detecting Frontend & Multithreaded, Replicated Backend
+Fourth, and final, part of semester long project for Parallel and Distributed Systems. The objective of this part was to implement a replication strategy on the backend such that nodes of the backend could fail without bringing the whole system down.
 ## Getting Started
 ### Prerequisites
 * A Linux operating system.
@@ -13,34 +13,64 @@ Unzip project into a directory of your choosing. All files and folders must rema
 ```go build frontend.go dbcommands.go```
 
 This will create an executable file within the directory titled "frontend".
+
+Navigate inside the /backend directory in console and type:
+
+```go build backend.go paxos.go```
+
+This will create an executable file within the directory titled "backend".
 ### Running
-To run the backend, navigate to the /backend directory in console and type:
+To run the backend, navigate to the /backend directory in console and type with appropriate flags:
 
-```go run backend.go```
+```./backend```
 
-To run the frontend, navigate to the /frontend directory in console and type:
+To run the frontend, navigate to the /frontend directory in console and type with appropriate flags:
 
 ```./frontend```
+
+The backends must be started before the frontend. An example of a typical running scenario is as follows:
+
+```bash
+./backend --id 1 --listen 8090 --backend :8091,:8092 &
+./backend --id 2 --listen 8091 --backend :8090,:8092 &
+./backend --id 3 --listen 8092 --backend :8090,:8091 &
+./frontend --listen 8081 --backend :8090,:8091,:8092
+```
 ## Testing
 ### Initial
 In regards to the backend:
 
 * Without a listen flag, the backend will automatically bind to the port 8090 on your localhost domain.
 
+* Mandatory flags:
+
+    * Without a backend flag, the backend will not have peers and will not dial them
+
+    * Without an id flag, the backend will not have an id to identify itself by
+
 In regards to the frontend:
 
 * Without a listen flag, the frontend will automatically bind to port 8080 on your localhost domain for listening to HTTP requests. As such, within a browser of your choosing, go to http://localhost:8080 to view the root page.
 
-* Without a backend flag, the frontend will automatically send all requests for the backend to the address "localhost:8090".
+* Mandatory flags:
+
+    * Without a backend flag, the frontend will only be able to dial one backend.
 
 ### Setting a Listen Flag
 In regards to the backend:
-* Using the command flag `--listen`, the backend will bind to a custom port of your choosing. For example, the backend will bind to port 8091 if you run `go run backend.go --listen 8091` in your /backend directory. As such, the backend will then listen for requests on port 8091.
+* Using the command flag `--listen`, the backend will bind to a custom port of your choosing. For example, the backend will bind to port 8091 if you run `./backend --listen 8091` in your /backend directory. As such, the backend will then listen for requests on port 8091.
 
 In regards to the frontend:
 * Using the command flag `--listen`, the frontend will bind to a custom port of your choosing for listening to HTTP requests. For example, the frontend will bind to port 8092 if you run `./frontend --listen 8092` in your /frontend directory. As such, you will be able to find the webserver at http://localhost:8092.
 ### Setting a Backend Flag
-Using the command flag `--backend`, the frontend will bind to a custom address(ip, port) of your choosing for the sending of requests to the backend. For example, the frontend will send requests to the address 10.18.207.22:8100 if you run `./frontend --backend 10.18.207.22:8100` in your /frontend directory. As such, the frontend will send all requests to the 10.18.207.22:8100 address.
+In regards to the backend:
+* Using the command flag `--backend`, the backend will be aware of its peer nodes on the network. For example, the backend will contact addressed `localhost:8091` and `localhost:8092` if you run `./backend --backend :8091,:8092` in your /backend directory. Addresses must be given in the form of comma separated list.
+
+
+In regards to the frontend:
+Using the command flag `--backend`, the frontend will contact one the custom addresses(ip, port) of your choosing for the sending of requests to the backend. For example, the frontend will send requests to the address localhost:8090 or localhost:8091 if you run `./frontend --backend :8090,:8091` in your /frontend directory. Addresses must be given in the form of comma separated list.
+### Setting an ID Flag
+All backends must be run with an appropriate ID flag. Flags must be unique 32-bit integers, beginning at one. For example, the backend will identify as node 1 if you run `./backend --id 1`
 ### Creation
 On the root page of the webserver is a "Create!" link that, if followed, will take you to a /create/id page of the webserver. At this page, you can fill out the form accordingly. All form values are required and the rating form value only accepts integers from 1 to 10. Click the "Save" button to save item or the "Cancel" link to discard the item, both return automatically to the root page.
 ### Editing
@@ -48,10 +78,10 @@ On the root page of the webserver is a "Edit" link under each review item that, 
 ### Deletion
 On the root page of the webserver is a "Delete" link under each review item that, if followed, will delete the aforementioned review item. If one attempts to delete an item that is not recognized, they will be automatically redirected to the root page.
 ### Failure
-If you run the frontend while the backend is not currently running, a failure detection message will be printed every ~5 seconds. 
+The frontend will randomly ping one of the backends every 5 seconds; printing a message if failure is detected. Additonally, one can test the backend replication by stopping one after a normal start. As long as the number of nodes does not fall below quorum, one should still be able to write. However, if the number of nodes falls below quorum, any date operations (such as create, update, and delete) will fail silently, except for a log printed on the frontend.
 ## Assignment Information
 ### State of Assignment
-Assignment was completed to specifications as listed in project3.pdf and, to the author's knowledge, meets all specifications.
+Currently, the system is incapable of correctly recovering from the failure of nodes. Nodes can be restarted but they will forever have inconsistent data. A possible solution would be to save if a node fails due to ping and then send it a special start message to contact a functioning node and receive the correct data from it.
 ### Resources Used
 In particular: 
 
@@ -62,55 +92,12 @@ In general:
 * https://golang.org/
 
 ### Design Decisions
-I used a single RW Mutex to wrap my map in which my database stores its data. I choose a RW Mutex due to its relative simplicity while still allowing concurrent read calls that I felt would be important for a CRUD server given that multiple frontends may simple want to read the data at the same time. I attempted to ensure some finer granularity by wrapping the minimal portions of my backend code said mutex allowing the majority of the logic to be performed outside of the locked data structure. 
+I chose the Paxos replication strategy. I disliked the constant pinging of Raft and liked the idea of a less leader dependent replication strategy. Viewstamped replication seemed too niche compared to the resources for Raft and Paxos. 
 
-The major con of a RW Mutex is that I'm still wrapping the entire map in a mutex at points and thus it is unnessarily big. I would have liked to use a thread that manages the state of the server by owning a map inside of itself and accepting stateful changes through channels but, due to the complexity, avoided this method for this assignment. I plan on at least attempting to implement this in my completion of part 4.
+The cons of Paxos was the need for implementation of a large set of functions to handle the correct types of messages. I also did not implement the optimized version of MultiPaxos with leaders so I complete the very costly version of Paxos every time data is updated.
 
-In terms of performance metrics, mean latency seemed the best (as stated within the project3.pdf itself). I wanted a balanced amount of POST and GET requests so I wrote a list of targets that balanced that and ran the the following vegeta commands:
+The pros of Paxos were most likely found in the difficulty of implementation. I had to be intimately familiar with how my messages could fail or be denied to implement a working version while Raft may have left some abstraction. Additionally, the leaderless system allows for the frontend to contact any node in particular without the need for rerouting data.
 
-Combined attack:
-
-```
-$ vegeta attack -rate=10 -workers=50 -duration=30s -targets=targets.txt | vegeta report
-Requests      [total, rate]            300, 10.03
-Duration      [total, attack, wait]    29.906003203s, 29.900132347s, 5.870856ms
-Latencies     [mean, 50, 95, 99, max]  4.623476ms, 4.202675ms, 8.80859ms, 10.119648ms, 11.415049ms
-Bytes In      [total, mean]            5896050, 19653.50
-Bytes Out     [total, mean]            6900, 23.00
-Success       [ratio]                  100.00%
-Status Codes  [code:count]             200:300  
-Error Set:
-```
-POST-based attack:
-
-```
-$ vegeta attack -rate=10 -workers=50 -duration=30s -targets=targets.txt | vegeta report
-Requests      [total, rate]            300, 10.03
-Duration      [total, attack, wait]    29.914335834s, 29.900133732s, 14.202102ms
-Latencies     [mean, 50, 95, 99, max]  11.259338ms, 11.517471ms, 15.804722ms, 17.163882ms, 17.679817ms
-Bytes In      [total, mean]            22547786, 75159.29
-Bytes Out     [total, mean]            13800, 46.00
-Success       [ratio]                  100.00%
-Status Codes  [code:count]             200:300  
-Error Set:
-```
-GET-based attack:
-
-```
-$ vegeta attack -rate=10 -workers=50 -duration=30s -targets=targets.txt | vegeta report
-Requests      [total, rate]            300, 10.03
-Duration      [total, attack, wait]    29.900839034s, 29.900077469s, 761.565µs
-Latencies     [mean, 50, 95, 99, max]  1.333649ms, 1.288811ms, 1.983167ms, 2.43869ms, 3.38638ms
-Bytes In      [total, mean]            344400, 1148.00
-Bytes Out     [total, mean]            0, 0.00
-Success       [ratio]                  100.00%
-Status Codes  [code:count]             200:300  
-Error Set:
-```
-As you can see in these reports, my mean latencies vary wildly depending on the composition of the attack. GET requests are processed relatively quickly at 1.33ms while POST requests are processed at a languid 11.26ms. It is clear from this that concurrent writes result in a much larger delay than concurrent reads, most likely due to the RW Mutex only exclusively locking the map for writes. The combined attack has a mean latency of 4.62ms which is respectable but I cannot shake the assumption that with a concurrency approach that lacked mutexes I would be able to bring the mean latency closer to that of the GET-based attack.
-
-I implemented my failure detector using the ping-ack approach with a wait time of 5 seconds between each ping. My approach additionally waits up to 5 seconds for a response upon writing to the backend. If my approach waits for on read, it will skip the wait time before initiating a ping again. I considered heartbeat but felt like ping-ack would be a less brittle approach for this part of the assignment as it only featured multiple frontends. However, it may be useful to consider heartbeat when adding multiple backends.
-
-While not related to the purpose of the assignment, I discovered an interesting bug in my program using vegeta that, due to the fact that I send the entire data structure on a ReadAll call, I was quickly overloading the buffer I created to read responses into on my frontend with a map of sufficient size. As such, I increased the buffer size form 1024 to 8096 bytes such that it would be handle larger map sizes but, obviously, there is still a limit on that size. As such, I plan on implementing a more clever method of dealing with my ReadAll calls in the future.
+My system can handle up to n/2 failures of nodes but can not recover correctly from said failure.
 ### Additional Thoughts
-Instructions were clear. Time allotment was ample. Support was not used.
+Instructions were clear. Time allotment was ample. Maybe one more day would have been nice but that is a personal issue. Support was not used.

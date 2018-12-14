@@ -12,6 +12,7 @@ import (
 )
 
 var backendAddr string
+var backendPorts []string
 
 /* Http request handler for "/" page. Displays items and links for
 creation, editing, and deletion. */
@@ -42,7 +43,12 @@ func saveHandler(w http.ResponseWriter, r *http.Request) {
 	if ID == 0 {
 		bCreate(Album, Artist, Rating32, Body)
 	} else {
-		if _, exist := bRead(ID32); exist {
+		_, exist, err := bRead(ID32)
+		if err != nil {
+			log.Println(`frontend: saveHandler(): read fail`)
+			http.Redirect(w, r, r.Header.Get("referer"), 307)
+		}
+		if exist {
 			bUpdate(ID32, Album, Artist, Rating32, Body)
 		}
 	}
@@ -61,7 +67,11 @@ edited. Upon form submission, redirects to "/save/" */
 func editHandler(w http.ResponseWriter, r *http.Request) {
 	ID, _ := strconv.Atoi(r.URL.Path[len("/edit/"):])
 	ID32 := int32(ID)
-	review, exist := bRead(ID32)
+	review, exist, err := bRead(ID32)
+	if err != nil {
+		log.Println(`frontend: editHandler(): read fail`)
+		http.Redirect(w, r, r.Header.Get("referer"), 307)
+	}
 	if !exist {
 		http.Redirect(w, r, "/create/", http.StatusFound)
 		return
@@ -76,7 +86,11 @@ func deleteHandler(w http.ResponseWriter, r *http.Request) {
 	ID, _ := strconv.Atoi(r.URL.Path[len("/delete/"):])
 	ID32 := int32(ID)
 	// Could do this logic on backend
-	_, exist := bRead(ID32)
+	_, exist, err := bRead(ID32)
+	if err != nil {
+		log.Println(`frontend: deleteHandler(): read fail`)
+		http.Redirect(w, r, r.Header.Get("referer"), 307)
+	}
 	if exist {
 		bDelete(ID32)
 	}
@@ -89,7 +103,7 @@ func main() {
 	backendPortsString := flag.String("backend", "localhost:8090", `Specify hostname:port of backends in comma
 		`+`separated list.`)
 	flag.Parse()
-	backendPorts := strings.Split(*backendPortsString, ",")
+	backendPorts = strings.Split(*backendPortsString, ",")
 
 	backendAddr = backendPorts[0]
 	portStr := ":" + strconv.Itoa(*httpPort)
@@ -104,6 +118,10 @@ func main() {
 	fmt.Println("Connect made to backend at:", backendAddr)
 	go bPing()
 
-	bStart(backendPorts)
+	log.Println(`Try 1:`, randAddr())
+	log.Println(`Try 2:`, randAddr())
+	log.Println(`Try 3:`, randAddr())
+
+	bStart()
 	log.Fatal(http.ListenAndServe(portStr, nil))
 }

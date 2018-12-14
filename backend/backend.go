@@ -14,7 +14,7 @@ import (
 
 	"../proto"
 
-	rr "reqrep"
+	rr "../reqrep"
 )
 
 // Review struct holds entry data
@@ -42,8 +42,8 @@ func reportErr(err error) {
 
 /* rvToRBody (Review to RBody) takes a pointer to a review struct and converts it
 into a protocol buffer RBody item for use in responses */
-func rvToRBody(data *Review) *pb.Transaction_RBody {
-	rBody := &pb.Transaction_RBody{
+func rvToRBody(data *Review) *pb.PMessage_RBody {
+	rBody := &pb.PMessage_RBody{
 		RID:    *proto.Int32(data.ID),
 		Album:  *proto.String(data.Album),
 		Artist: *proto.String(data.Artist),
@@ -64,32 +64,31 @@ func addReview(album string, artist string, rating int32, body string) {
 		Rating: rating,
 		Body:   body,
 	}
-	mutex.Lock()
-	defer mutex.Unlock()
+	/* 	mutex.Lock()
+	   	defer mutex.Unlock() */
 	idCount++
 	review.ID = idCount
 	rMap[idCount] = review
 }
 
-// createReview reads sent review data from transaction and adds it to the map
-func createReview(data *pb.Transaction) {
+// createReview reads sent review data from PMessage and adds it to the map
+func createReviewData(data *pb.PMessage) {
 	// get review data
 	rData := data.GetReviews()[0]
-	paxMutex.Lock()
-	defer paxMutex.Unlock()
-	paxos(
-		toProtoPlusOne(lenLog()),
-		newAction(pCreate, 0, rData.GetAlbum(), rData.GetArtist(), rData.GetRating(), rData.GetBody()),
-	)
-	addReview(rData.GetAlbum(), rData.GetArtist(), rData.GetRating(), rData.GetBody())
+	_, _, err := paxos(toProtoPlusOne(lenLog()), newActionRv(pCreate, toReview(rData)))
+	if err != nil {
+		log.Println(`backend: createReviewData(): paxos err`)
+		log.Println(err)
+	}
+	// addReview(rData.GetAlbum(), rData.GetArtist(), rData.GetRating(), rData.GetBody())
 }
 
-/* readReview reads sent review request data from transaction, checks if the review
+/* readReview reads sent review request data from PMessage, checks if the review
 exists within the map, and then responds accordingly with either the packaged
-review data in a transaction or a invalid signal in a transaction */
-func readReview(data *pb.Transaction) ([]byte, error) {
-	// Build transaction body
-	response := new(pb.Transaction)
+review data in a PMessage or a invalid signal in a PMessage */
+func readReviewData(data *pb.PMessage) ([]byte, error) {
+	// Build PMessage body
+	response := new(pb.PMessage)
 	// Get review request data
 	rData := data.GetReviews()[0]
 	mutex.RLock()
@@ -99,45 +98,61 @@ func readReview(data *pb.Transaction) ([]byte, error) {
 		body := rvToRBody(review)
 		// Build review body data
 		response.Reviews = append(response.Reviews, body)
-		response.TType = *proto.Int(1) // Sig: review found
+		response.MsgType = *proto.Int32(1) // Sig: review found
 	} else {
-		response.TType = *proto.Int(2) // Sig: review not found
+		response.MsgType = *proto.Int32(2) // Sig: review not found
 	}
 	return proto.Marshal(response)
 }
 
-/* updateReview reads sent review data from transaction and updates the corresponding
+/* updateReview reads sent review data from PMessage and updates the corresponding
 review in the map */
-func updateReview(data *pb.Transaction) {
-	// Get review data from transaction
+func updateReviewData(data *pb.PMessage) {
+	// Get review data from PMessage
 	rData := data.GetReviews()[0]
 	// Update data based on sent data
-	mutex.Lock()
-	defer mutex.Unlock()
-	review := rMap[rData.GetRID()]
-	review.Album = rData.GetAlbum()
-	review.Artist = rData.GetArtist()
-	review.Rating = rData.GetRating()
-	review.Body = rData.GetBody()
+	/* 	mutex.Lock()
+	   	defer mutex.Unlock() */
+	// updateReview(rData.GetRID(), rData.GetAlbum(), rData.GetArtist(), rData.GetRating(),
+	// 	rData.GetBody())
+	_, _, err := paxos(toProtoPlusOne(lenLog()), newActionRv(pUpdate, toReview(rData)))
+	if err != nil {
+		log.Println(`backend: updateReviewData(): paxos err`)
+		log.Println(err)
+	}
 }
 
-/* deleteReview reads sent review data from transaction and deletes the corresponding
+// Exposed update review point for paxos
+func updateReview(id int32, album string, artist string, rating int32, body string) {
+	review := rMap[id]
+	review.Album = album
+	review.Artist = artist
+	review.Rating = rating
+	review.Body = body
+}
+
+/* deleteReview reads sent review data from PMessage and deletes the corresponding
 review in the map */
-func deleteReview(data *pb.Transaction) {
-	// Get review data from transaction
+func deleteReviewData(data *pb.PMessage) {
+	// Get review data from PMessage
 	rData := data.GetReviews()[0]
 	// Delete data based on sent ID
-	mutex.Lock()
-	defer mutex.Unlock()
-	delete(rMap, rData.GetRID())
+	/* 	mutex.Lock()
+	   	defer mutex.Unlock() */
+	// delete(rMap, rData.GetRID())
+	_, _, err := paxos(toProtoPlusOne(lenLog()), newActionRv(pDelete, toReview(rData)))
+	if err != nil {
+		log.Println(`backend: deleteReviewData(): paxos err`)
+		log.Println(err)
+	}
 }
 
-/* readAllReview responds to a READALL request with a response transaction containing
+/* readAllReview responds to a READALL request with a response PMessage containing
 all reviews in the map */
-func readAllReview(data *pb.Transaction) ([]byte, error) {
-	// Build transaction body
-	response := new(pb.Transaction)
-	var body *pb.Transaction_RBody
+func readAllReviewData(data *pb.PMessage) ([]byte, error) {
+	// Build PMessage body
+	response := new(pb.PMessage)
+	var body *pb.PMessage_RBody
 	/* Copy all reviews from map, convert them to protobuf format, build review body
 	data */
 	mutex.RLock()
@@ -149,23 +164,23 @@ func readAllReview(data *pb.Transaction) ([]byte, error) {
 	return proto.Marshal(response)
 }
 
-func start(data *pb.Transaction) ([]byte, error) {
+func start(data *pb.PMessage) ([]byte, error) {
 	log.Println(`backend`, nodeID, `received start signal.`)
 	started = true
 
-	t := new(pb.Transaction)
+	t := new(pb.PMessage)
 	t.ClientID = *proto.Int32(nodeID)
-	t.TType = *proto.Int(-1) // START
-	t.Valid = *proto.Int(1)  // VALID
+	t.MsgType = *proto.Int32(-1) // START
+	t.Valid = *proto.Int32(1)    // VALID
 
 	return proto.Marshal(t)
 }
 
 // Pings all nodes on network
 func pingNetwork() {
-	t := new(pb.Transaction)
+	t := new(pb.PMessage)
 	t.ClientID = *proto.Int32(nodeID)
-	t.TType = *proto.Int(5)
+	t.MsgType = *proto.Int32(5)
 
 	testMsg, err := proto.Marshal(t)
 	if err != nil {
@@ -178,29 +193,27 @@ func pingNetwork() {
 		responses, failures := network.Send(testMsg)
 		log.Println(`Received`, failures, `failures`)
 		for i := range responses {
-			current := new(pb.Transaction)
+			current := new(pb.PMessage)
 			err = proto.Unmarshal(responses[i], current)
-			// reportErr(err)
 			if err != nil {
-				log.Println(`Read responses error:`, err)
+				// log.Println(`Read responses error:`, err)
 			}
-			log.Println(`Received:`, current)
+			// log.Println(`Received:`, current)
 		}
 	}()
 }
 
-func ack(data *pb.Transaction) ([]byte, error) {
-	response := new(pb.Transaction)
-	response.TType = *proto.Int(1)
+func ack(data *pb.PMessage) ([]byte, error) {
+	response := new(pb.PMessage)
+	response.MsgType = *proto.Int32(1)
 	return proto.Marshal(response)
 }
 
 func invalidResponse() []byte {
-	response := new(pb.Transaction)
+	response := new(pb.PMessage)
 	response.ClientID = *proto.Int32(nodeID)
 	response.Valid = *proto.Int32(2) // INVALID
 	responseBytes, err := proto.Marshal(response)
-	// reportErr(err)
 	if err != nil {
 		log.Println(`backend: invalidResponse(): failed marshal invalid response`)
 	}
@@ -221,7 +234,7 @@ func handleRequest(conn net.Conn) {
 		log.Println(err)
 	}
 
-	data := new(pb.Transaction)
+	data := new(pb.PMessage)
 	err = proto.Unmarshal(buf[:size], data)
 	if err != nil {
 		log.Println(`backend: handleRequest(): conn message unmarshal error`)
@@ -232,7 +245,7 @@ func handleRequest(conn net.Conn) {
 	switch started {
 	// If not started, check if the signal is to start. Otherwise, respond invalid
 	case false:
-		if data.GetTType() == -1 {
+		if data.GetMsgType() == -1 {
 			response, err := start(data)
 			if err != nil {
 				log.Println(`backend: handleRequest(): start error`)
@@ -244,23 +257,24 @@ func handleRequest(conn net.Conn) {
 		}
 	// If started, handle messages normally
 	case true:
-		// Check transaction type and respond/handle accordingly
-		switch data.GetTType() {
+		// Check PMessage type and respond/handle accordingly
+		switch data.GetMsgType() {
 		case pCreate: // CREATE
-			createReview(data)
+			// paxos(toProtoPlusOne(lenLog()),)
+			createReviewData(data)
 		case pRead: // READ
-			response, err := readReview(data)
+			response, err := readReviewData(data)
 			reportErr(err)
 
 			conn.Write(response)
 		case pUpdate: // UPDATE
-			updateReview(data)
+			updateReviewData(data)
 		case pDelete: // DELETE
-			deleteReview(data)
+			deleteReviewData(data)
 		case pReadAll: // READALL
 			pingNetwork()
 
-			response, err := readAllReview(data)
+			response, err := readAllReviewData(data)
 			if err != nil {
 				log.Println(`backend: handleRequest(): readAllReview error`)
 				log.Println(err)
@@ -277,14 +291,19 @@ func handleRequest(conn net.Conn) {
 
 			conn.Write(response)
 		case proposeVal:
-			fmt.Println(`Receive proposal:`, data)
+			log.Println(`Receive proposal:`, data)
 			mutex.Lock()
 			defer mutex.Unlock()
 			response := promise(data)
 			conn.Write(response)
+			log.Println(`Responded to proposal.`)
 		case acceptVal:
-			fmt.Println(`Receive accept!:`, data)
-
+			log.Println(`Receive accept!:`, data)
+			mutex.Lock()
+			defer mutex.Unlock()
+			response := accepted(data)
+			conn.Write(response)
+			log.Println(`Responded to accept!`)
 		default:
 			conn.Write(invalidResponse())
 		}

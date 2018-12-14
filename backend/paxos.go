@@ -9,6 +9,7 @@ import (
 	"github.com/golang/protobuf/proto"
 )
 
+// Declare consts to use
 const (
 	pCreate = iota
 	pRead
@@ -18,11 +19,12 @@ const (
 	pPingAck
 	proposeVal
 	promiseVal
-	oldPromiseVal // if node proposed val for something that already exists, must learn old log value
-	nackPromiseVal
+	oldPromiseVal  // if node proposed val for something that already exists, must learn old log value
+	nackPromiseVal // if node proposed val lower than already promised
 	acceptVal
 	acceptedVal
-	bullyVal
+	nackAcceptedVal // if node sent accept! with unacceptable data
+	bullyVal        // unused
 )
 
 // Action represents an action taken upon the database of reviews
@@ -44,6 +46,13 @@ func newAction(op int32, id int32, album string, artist string, rating int32, bo
 	}
 }
 
+func newActionRv(op int32, rv *Review) Action {
+	return Action{
+		Op:  op,
+		Val: *rv,
+	}
+}
+
 // Mutex used for locking dataLog and promiseMap (necessary for paxos)
 var paxMutex *sync.Mutex
 
@@ -51,7 +60,7 @@ var paxMutex *sync.Mutex
 var dataLog []Action
 
 // Key = ArrVal, Val = HighestPropNum for tha ArrVal in dataLog
-var promiseMap map[int64]int64
+var promiseMap = make(map[int64]int64)
 
 // Leader ID
 var currentLeader = int32(-1)
@@ -179,34 +188,47 @@ func (msg *Message) toPMessage() *pb.PMessage {
 
 // paxos runs a round of the paxos algorithm for a specific section of the dataLog
 func paxos(arrVal int64, val Action) (int64, interface{}, error) {
+	log.Println(`Started paxos`)
 	var propNum int64
+retryPropose:
 	responses, err := propose(arrVal, propNum)
 	if err != nil {
-		return -1, 0, errors.New("propose received too many failures")
+		// Quroum not received, repeat paxos
+		return -1, nil, errors.New("propose fail")
 	}
+	log.Println(`Proposed to all nodes`)
 
-beforeCheck:
 	propNum, recvAction, err := checkPromises(propNum, responses.([][]byte))
 	if err != nil {
+		log.Println(`paxos: paxos(): check err`, err)
 		switch err.Error() {
 		case "nack":
-			// I'm sorry
-			goto beforeCheck
+			// Loop back to first check if nack doesn't work (propNum updated)
+			goto retryPropose
 		case "old":
 			val = recvAction.(Action)
 		case "fail":
+			// Repeat paxos
 			return propNum, nil, err
 		}
 	}
+	log.Println(`Finished checking promises.`)
 
+	log.Println(`arrVal:`, arrVal, `propNum:`, propNum)
 	promiseMap[arrVal] = propNum
 
+	log.Println(`Sending accept to all nodes.`)
 	err = accept(arrVal, propNum, val)
-	for err != nil {
-		err = accept(arrVal, propNum, val)
+	if err != nil {
+		// Retry with new propNum
+		log.Println(`paxos: paxos(): accept err`)
+		log.Println(err)
+		return propNum, nil, errors.New("retry")
 	}
 
-	// Update self here with function call
+	log.Println(`Updating self...`)
+	updateSelf(val)
+	log.Println(`Finished updating`)
 
 	return propNum, nil, nil
 }
@@ -222,6 +244,11 @@ func propose(arrVal int64, propNum int64) (interface{}, error) {
 	}
 
 	responses, failures := network.Send(request)
+
+	log.Println(`Propose quorum:`, network.Quorum())
+	log.Println(`Propose failures:`, failures)
+	valid := failures >= network.Quorum()
+	log.Println(`failures >= quorum result:`, valid)
 
 	if failures >= network.Quorum() {
 		return nil, errors.New("too many failures")
@@ -239,14 +266,14 @@ func checkPromises(propNum int64, responses [][]byte) (int64, interface{}, error
 	// var setVal bool
 	// var setPropNum bool
 	var result string
+	var current pb.PMessage
 	log.Println(`Checking promises...`)
 	for i := range responses {
-		var current *pb.PMessage
-		log.Println(current)
-		err := proto.Unmarshal(responses[i], current)
+		err := proto.Unmarshal(responses[i], &current)
 		if err != nil {
 			log.Println(`paxos: propose(): unmarshal response fail`)
 		}
+		log.Println(current)
 
 		switch current.GetMsgType() {
 		case promiseVal:
@@ -265,10 +292,12 @@ func checkPromises(propNum int64, responses [][]byte) (int64, interface{}, error
 			}
 		case oldPromiseVal:
 			// Stale log detected, update log, repeat paxos
-			if result == "" {
+			if result == "" || result == "old" {
 				result = "old"
-				highestPropNum = current.GetPropNum()
-				msgVal = *toAction(current.GetVals()[0])
+				if highestPropNum < current.GetPropNum() {
+					highestPropNum = current.GetPropNum()
+					msgVal = *toAction(current.GetVals()[0])
+				}
 			}
 		}
 	}
@@ -285,28 +314,6 @@ func checkPromises(propNum int64, responses [][]byte) (int64, interface{}, error
 		log.Println(`paxos: checkPromises(): checkPromises failed silently`)
 		return highestPropNum, nil, errors.New("fail")
 	}
-	/* lenVals := len(current.GetVals())
-		log.Println(`Length of vals:`, lenVals)
-		responsePropNum := current.GetPropNum()
-
-		// If node sent val back, it has already accepted a value
-		if lenVals != 0 {
-			log.Println(`Current propNum:`, propNum, `responsePropNum:`, responsePropNum)
-			if propNum > responsePropNum {
-				highestPropNum = responsePropNum
-				msgVal = *toAction(current.GetVals()[0])
-				setVal = true
-			}
-		// If node sent back nack, proposal # too low but no accepted val
-		} else if current.GetMsgType() == nackPromiseVal {
-			if propNum > res
-		}
-	}
-
-	if setVal {
-		return highestPropNum, msgVal
-	}
-	return propNum, nil */
 }
 
 // accept sends accept! messages to other nodes and returns an error if quorum does not respond (might remove error)
@@ -319,15 +326,18 @@ func accept(arrVal int64, propNum int64, val Action) error {
 		log.Println(err)
 	}
 
-	_, failures := network.Send(request)
+	responses, failures := network.Send(request)
 
 	if failures >= network.Quorum() {
-		return errors.New("too many failures")
+		return errors.New("quorum_fail")
 	}
 
-	return nil
+	err = checkAccepted(responses)
+
+	return err
 }
 
+// Bully is meant to be a version of the bully algorithm but was not used
 func bully() {
 	msg := newMessage(network.LocalAddr, nodeID, bullyVal, 0, 0, toProtoPlusOne(lenLog()))
 	protoMsg := msg.toPMessage()
@@ -368,6 +378,7 @@ func bully() {
 	currentLeader = chosenID
 }
 
+// Promise is used to create response to propose requests
 func promise(data *pb.PMessage) []byte {
 	arrVal := data.GetArrVal()
 	propNum := data.GetPropNum()
@@ -388,6 +399,7 @@ func promise(data *pb.PMessage) []byte {
 			toProtoPlusOne(lenLog()))
 	}
 
+	log.Println(`Responding to propose:`, msg)
 	protoMsg := msg.toPMessage()
 	responseBytes, err := proto.Marshal(protoMsg)
 	if err != nil {
@@ -395,4 +407,90 @@ func promise(data *pb.PMessage) []byte {
 	}
 
 	return responseBytes
+}
+
+// Accepted is used to create response to accept! requests
+func accepted(data *pb.PMessage) []byte {
+	arrVal := data.GetArrVal()
+	propNum := data.GetPropNum()
+	val := toAction(data.GetVals()[0])
+
+	var msg *Message
+	var result string
+
+	// If arrVal is valid
+	if fromProtoMinusOne(arrVal) == lenLog() {
+		// If there was a previous promise
+		if currentPropNum, ok := promiseMap[arrVal]; ok {
+			// If the previous promise was lower
+			if currentPropNum < propNum {
+				result = "ack"
+			} else {
+				result = "nack"
+			}
+		} else {
+			result = "ack"
+		}
+	} else {
+		result = "nack"
+	}
+
+	switch result {
+	case "ack":
+		promiseMap[arrVal] = propNum
+		updateSelf(*val)
+		msg = newMessage(network.LocalAddr, nodeID, acceptedVal, 0, 0, toProtoPlusOne(lenLog()))
+	case "nack":
+		msg = newMessage(network.LocalAddr, nodeID, nackAcceptedVal, 0, 0,
+			toProtoPlusOne(lenLog()))
+	}
+
+	log.Println(`Responding to accept!:`, msg)
+
+	protoMsg := msg.toPMessage()
+	responseBytes, err := proto.Marshal(protoMsg)
+	if err != nil {
+		log.Println(`paxos: accepted(): Response marshal fail`)
+	}
+
+	return responseBytes
+}
+
+// checkAccepted iterates through accepted responses to check for nacks
+func checkAccepted(responses [][]byte) error {
+	log.Println(`Checking accepted...`)
+	var current pb.PMessage
+	for i := range responses {
+		err := proto.Unmarshal(responses[i], &current)
+		if err != nil {
+			log.Println(`paxos: checkAccepted(): unmarshal response fail`)
+		}
+		log.Println(current)
+
+		switch current.GetMsgType() {
+		case nackAcceptedVal:
+			return errors.New("nack")
+		}
+	}
+
+	return nil
+}
+
+// Called by paxos to update log and data store simultaneously
+func updateSelf(val Action) int64 {
+	// do something
+	rv := val.Val
+	log.Println(`Node`, nodeID, `trying to updateSelf() with:`, val)
+	switch val.Op {
+	case pCreate:
+		addReview(rv.Album, rv.Artist, rv.Rating, rv.Body)
+	case pUpdate:
+		updateReview(rv.ID, rv.Album, rv.Artist, rv.Rating, rv.Body)
+	case pDelete:
+		delete(rMap, rv.ID)
+	}
+
+	dataLog = append(dataLog, val)
+
+	return lenLog() // return new length of log
 }

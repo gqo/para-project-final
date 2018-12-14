@@ -1,0 +1,14 @@
+<!-- Graeme Ferguson | ggf221 | 09/25/18 -->
+<!DOCTYPE html>
+<html>
+    <body style= "background-color:#FF91AF">
+        <form action="/save/0" method="POST">
+            Album name: <input type="text" name="albumName" required><br>
+            Artist name: <input type="text" name="artistName" required><br>
+            Rating (x / 10): <input type="number" name="rating"  min="1" max="10" required><br>
+            Body: <textarea name="bodyText" rows="20" cols="30" required></textarea><br>
+            <input type="submit" value="Save">
+        </form>
+        <a href="/">Cancel</a>
+    </body>
+</html>

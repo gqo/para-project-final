@@ -1,0 +1,18 @@
+<!-- Graeme Ferguson | ggf221 | 09/25/18 -->
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>Editing Album Review!</title>
+    </head>
+    <body style= "background-color:#FF91AF">
+        <h2>Editing Album Review!</h2>
+        <form action="/save/{{.ID}}" method="POST">
+            Album name: <input type="text" name="albumName" value="{{.Album}}" required><br>
+            Artist name: <input type="text" name="artistName" value="{{.Artist}}" required><br>
+            Rating (x / 10): <input type="number" name="rating" min="1" max="10" value="{{.Rating}}" required><br>
+            Body: <textarea name="bodyText" rows="20" cols="30" required>{{.Body}}</textarea><br>
+            <input type="submit" value="Save">
+        </form>
+        <a href="/">Cancel</a>
+    </body>
+</html>

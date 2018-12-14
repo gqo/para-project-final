@@ -1,0 +1,28 @@
+syntax = "proto3";
+package pb;
+
+message Transaction {
+    int32 ClientID = 1;
+    int32 TType = 2;
+    /* For TType specifically, the value is such:
+    Frontend -> Backend
+    [0, 1, 2, 3, 4, 5] represent [CREATE, READ, UPDATE, DELETE, READALL, PING] calls
+    Backend -> Frontend
+    [1, 2] represent [VALID, INVALID] operations (i.e. if an operation could be performed)
+    Use cases:
+        Used to notify if Review exists within database
+        Used to respond to PING call
+    */
+    repeated RBody Reviews = 3;
+
+    // Defines review struct data
+    message RBody {
+        int32 RID = 1;
+        string Album = 2;
+        string Artist = 3;
+        int32 Rating = 4;
+        string Body = 5;
+    }
+    
+    int32 Valid = 4;
+}

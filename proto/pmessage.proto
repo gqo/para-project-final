@@ -1,0 +1,32 @@
+syntax = "proto3";
+package pb;
+
+message PMessage {
+    string From = 1;
+    int32 MsgType = 2;
+    int64 ArrVal = 3;
+    int64 PropNum = 4;
+    
+    repeated PAction Vals = 5;
+    
+    int64 LogLen = 6;
+    
+    message PAction {
+        int32 Op = 1;
+        RBody Val = 2;
+    }
+    
+    message RBody {
+        int32 RID = 1;
+        string Album = 2;
+        string Artist = 3;
+        int32 Rating = 4;
+        string Body = 5;
+    }
+    
+    int32 ClientID = 7;
+    
+    repeated RBody Reviews = 8;
+    
+    int32 Valid = 9;
+}

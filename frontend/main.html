@@ -1,0 +1,24 @@
+<!-- Graeme Ferguson | ggf221 | 09/25/18 -->
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>Album Review Database!</title>
+    </head>
+    <body style="background-color:#ff91af;">
+        <h2>Album Review Database! <a href="/create/">Create!</a></h2> 
+        <hr>
+        <h1>Reviews: </h1> 
+        <!-- loops through map and prints items, and page links, accordingly-->
+        {{range $key, $value := .}}
+        <div>
+            <u><b>{{$value.Album}}</b> by <b>{{$value.Artist}}</b></u><br>
+            Rating: {{$value.Rating}}/10<br>
+            {{$value.Body}}<br>
+            <a href="/edit/{{$value.ID}}">Edit</a>
+            <a href="/delete/{{$value.ID}}">Delete</a>
+            <br>
+        </div>
+        <br>
+        {{end}}
+    </body>
+</html>
